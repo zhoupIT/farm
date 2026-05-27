@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var plantTime = Date()
     @State private var selectedCrop = cropCatalog[0]
     @State private var notificationMessage = "还没有安排提醒"
+    @State private var wateringAnimationTrigger = 0
     @AppStorage("playerLevel") private var playerLevel = 53
 
     private var recommendedCrop: Crop {
@@ -68,7 +69,7 @@ struct ContentView: View {
 
             Button {
                 plantTime = Date()
-                selectedCrop = FarmPlanner.recommendedCrop(now: Date(), crops: cropCatalog, playerLevel: playerLevel)
+                selectCrop(FarmPlanner.recommendedCrop(now: Date(), crops: cropCatalog, playerLevel: playerLevel))
             } label: {
                 Label("用当前时间并推荐", systemImage: "clock.arrow.circlepath")
                     .font(.system(size: 14, weight: .medium))
@@ -93,7 +94,7 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 if crop.unlockLevel <= playerLevel {
-                                    selectedCrop = crop
+                                    selectCrop(crop)
                                 }
                             }
                     }
@@ -155,7 +156,7 @@ struct ContentView: View {
             Spacer()
 
             Button {
-                selectedCrop = recommendedCrop
+                selectCrop(recommendedCrop)
             } label: {
                 Image(systemName: "checkmark.circle.fill")
             }
@@ -189,7 +190,7 @@ struct ContentView: View {
     /// 右侧顶部作物卡。
     private var hero: some View {
         HStack(alignment: .center, spacing: 30) {
-            CropImage(crop: plan.crop, size: 180)
+            WateringCropImage(crop: plan.crop, size: 180, trigger: wateringAnimationTrigger)
 
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 10) {
@@ -231,6 +232,13 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.xlRadius, style: .continuous))
         .overlay(AppTheme.glowBorder(cornerRadius: AppTheme.xlRadius))
         .shadow(color: AppTheme.leaf.opacity(0.20), radius: 22, y: 10)
+    }
+
+    private func selectCrop(_ crop: Crop) {
+        selectedCrop = crop
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.72)) {
+            wateringAnimationTrigger += 1
+        }
     }
 
     /// 一个小指标块。
@@ -416,6 +424,118 @@ struct TimelineRow: View {
         .background(AppTheme.surface)
         .clipShape(RoundedRectangle(cornerRadius: AppTheme.largeRadius, style: .continuous))
         .overlay(AppTheme.glassBorder(cornerRadius: AppTheme.largeRadius))
+    }
+}
+
+/// 点击作物时的浇水反馈动画。
+struct WateringCropImage: View {
+    let crop: Crop
+    let size: CGFloat
+    let trigger: Int
+
+    @State private var isPlaying = false
+    @State private var animationPhase = false
+
+    var body: some View {
+        ZStack {
+            CropImage(crop: crop, size: size)
+                .scaleEffect(isPlaying ? 1.035 : 1)
+                .offset(y: isPlaying ? -3 : 0)
+                .animation(.spring(response: 0.34, dampingFraction: 0.62), value: isPlaying)
+
+            if isPlaying {
+                waterDrops
+                waterRipple
+                highlightSweep
+            }
+        }
+        .frame(width: size * 1.18, height: size * 1.18)
+        .onChange(of: trigger) { _, newValue in
+            guard newValue > 0 else { return }
+            playAnimation()
+        }
+    }
+
+    private var waterDrops: some View {
+        ZStack {
+            ForEach(0..<7, id: \.self) { index in
+                Image(systemName: "drop.fill")
+                    .font(.system(size: dropSize(for: index), weight: .semibold))
+                    .foregroundStyle(AppTheme.water.opacity(index.isMultiple(of: 2) ? 0.92 : 0.72))
+                    .scaleEffect(animationPhase ? 0.72 : 1.05)
+                    .offset(
+                        x: dropXOffset(for: index),
+                        y: animationPhase ? size * 0.30 : -size * 0.42
+                    )
+                    .opacity(animationPhase ? 0 : 1)
+                    .animation(
+                        .easeInOut(duration: 0.68)
+                            .delay(Double(index) * 0.035),
+                        value: animationPhase
+                    )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var waterRipple: some View {
+        ZStack {
+            Circle()
+                .stroke(AppTheme.water.opacity(animationPhase ? 0 : 0.48), lineWidth: 3)
+                .scaleEffect(animationPhase ? 1.08 : 0.18)
+            Circle()
+                .stroke(AppTheme.leaf.opacity(animationPhase ? 0 : 0.26), lineWidth: 2)
+                .scaleEffect(animationPhase ? 0.82 : 0.12)
+        }
+        .frame(width: size * 0.78, height: size * 0.78)
+        .offset(y: size * 0.18)
+        .animation(.easeOut(duration: 0.72), value: animationPhase)
+        .allowsHitTesting(false)
+    }
+
+    private var highlightSweep: some View {
+        RoundedRectangle(cornerRadius: AppTheme.xlRadius, style: .continuous)
+            .fill(
+                LinearGradient(
+                    colors: [.white.opacity(0), .white.opacity(0.38), .white.opacity(0)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .frame(width: size * 0.82, height: size * 0.30)
+            .rotationEffect(.degrees(-18))
+            .offset(x: animationPhase ? size * 0.34 : -size * 0.38, y: -size * 0.08)
+            .opacity(animationPhase ? 0 : 1)
+            .blur(radius: 0.8)
+            .animation(.easeOut(duration: 0.58), value: animationPhase)
+            .allowsHitTesting(false)
+    }
+
+    private func playAnimation() {
+        isPlaying = false
+        animationPhase = false
+
+        Task { @MainActor in
+            isPlaying = true
+
+            try? await Task.sleep(nanoseconds: 18_000_000)
+            animationPhase = true
+
+            try? await Task.sleep(nanoseconds: 820_000_000)
+            withAnimation(.easeOut(duration: 0.18)) {
+                isPlaying = false
+            }
+            animationPhase = false
+        }
+    }
+
+    private func dropSize(for index: Int) -> CGFloat {
+        [20, 14, 18, 13, 17, 15, 12][index]
+    }
+
+    private func dropXOffset(for index: Int) -> CGFloat {
+        let positions: [CGFloat] = [-0.32, -0.18, -0.06, 0.08, 0.20, 0.31, 0.02]
+        return size * positions[index]
     }
 }
 
